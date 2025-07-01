@@ -6,31 +6,106 @@ import matplotlib
 # Load sample data from CSV
 @st.cache_data
 def load_data():
-    df = pd.read_csv("model_monitoring_sample_data.csv", parse_dates=["Uploaded_On"])
+    df = pd.read_csv("model_monitoring_sample_data2.csv", parse_dates=["Uploaded_On"])
+    df["Uploaded_On"] = pd.to_datetime(df["Uploaded_On"], errors='coerce')  # <-- Enforce datetime
     df["Anomaly_Flag"] = df["Anomaly_Flag"].astype(str).str.upper().eq("TRUE")
     return df
 
 df = load_data()
 
-# Sidebar filters
-st.sidebar.header("🔎 Filter Reports")
+from datetime import datetime, timedelta
 
-partners = st.sidebar.multiselect("Select Partner(s)", options=df["Partner_Name"].unique())
-models = st.sidebar.multiselect("Select Model(s)", options=df["Model_Name"].unique())
-tiers = st.sidebar.multiselect("Select Tier(s)", options=df["Tier"].unique())
-kpis = st.sidebar.multiselect("Select KPI(s)", options=df["KPI"].unique())
+# Create a mapping for quarter start dates
+quarter_start = {
+    "Q1": "-01-01",
+    "Q2": "-04-01",
+    "Q3": "-07-01",
+    "Q4": "-10-01"
+}
 
-# Apply filters only if user selects something; otherwise, show all
-filtered_df = df.copy()
+# Create Report_Date column
+def get_report_date(row):
+    if row["Period"].startswith("Q"):
+        return pd.to_datetime(f"{row['Year']}{quarter_start[row['Period'][:2]]}")
+    elif row["Period"].startswith("Y"):
+        return pd.to_datetime(f"{row['Year']}-01-01")
+    else:
+        return pd.NaT
 
-if partners:
-    filtered_df = filtered_df[filtered_df["Partner_Name"].isin(partners)]
-if models:
-    filtered_df = filtered_df[filtered_df["Model_Name"].isin(models)]
+df["Report_Date"] = df.apply(get_report_date, axis=1)
+
+# Filter Range Defaults
+min_report_date = df["Report_Date"].min().date()
+max_report_date = df["Report_Date"].max().date()
+
+# Default: last 2 years from max
+default_start = max(min_report_date, max_report_date - timedelta(days=730))
+default_end = max_report_date
+
+# Time range filter on sidebar
+st.sidebar.markdown("#### 📅 Filter by Report Date")
+report_range = st.sidebar.date_input(
+    "Report Date Range",
+    value=(default_start, default_end),
+    min_value=min_report_date,
+    max_value=max_report_date
+)
+
+# Apply filter
+if isinstance(report_range, tuple) and len(report_range) == 2:
+    start_date, end_date = report_range
+    df = df[(df["Report_Date"] >= pd.to_datetime(start_date)) & (df["Report_Date"] <= pd.to_datetime(end_date))]
+
+# Initialize filtered_df with full dataset
+filter_base_df = df.copy()
+
+# Tier filter
+tiers = st.sidebar.multiselect(
+    "Select Tier(s)", 
+    options=sorted(filter_base_df["Tier"].dropna().unique()), 
+    default=None
+)
 if tiers:
-    filtered_df = filtered_df[filtered_df["Tier"].isin(tiers)]
+    filter_base_df = filter_base_df[filter_base_df["Tier"].isin(tiers)]
+
+# Partner filter (based on Tier selection)
+partners = st.sidebar.multiselect(
+    "Select Partner(s)", 
+    options=sorted(filter_base_df["Partner_Name"].dropna().unique()), 
+    default=None
+)
+if partners:
+    filter_base_df = filter_base_df[filter_base_df["Partner_Name"].isin(partners)]
+
+# Model filter (based on Tier + Partner selection)
+models = st.sidebar.multiselect(
+    "Select Model(s)", 
+    options=sorted(filter_base_df["Model_Name"].dropna().unique()), 
+    default=None
+)
+if models:
+    filter_base_df = filter_base_df[filter_base_df["Model_Name"].isin(models)]
+
+# KPI filter (based on Tier + Partner + Model selection)
+kpis = st.sidebar.multiselect(
+    "Select KPI(s)", 
+    options=sorted(filter_base_df["KPI"].dropna().unique()), 
+    default=None
+)
 if kpis:
-    filtered_df = filtered_df[filtered_df["KPI"].isin(kpis)]
+    filter_base_df = filter_base_df[filter_base_df["KPI"].isin(kpis)]
+
+# Anomaly filter (optional)
+anomaly_filter = st.sidebar.selectbox(
+    "Filter by Anomaly", options=["All", "Only Anomalies", "Only Normal"]
+)
+if anomaly_filter == "Only Anomalies":
+    filter_base_df = filter_base_df[filter_base_df["Anomaly_Flag"] == True]
+elif anomaly_filter == "Only Normal":
+    filter_base_df = filter_base_df[filter_base_df["Anomaly_Flag"] == False]
+
+# Final filtered dataframe
+filtered_df = filter_base_df.copy()
 
 # Small CSS Tweaks
 st.markdown("""
@@ -82,6 +157,7 @@ with tab1:
         .to_dict()
     )
     latest_upload = filtered_df["Uploaded_On"].max()
+    latest_upload_str = latest_upload.strftime("%Y-%m-%d %H:%M:%S") if pd.notnull(latest_upload) else "N/A"
     total_reports = filtered_df.drop_duplicates(subset=["Partner_Name", "Model_ID", "Year", "Period"]).shape[0]
 
     # KPI Cards
@@ -121,8 +197,8 @@ with tab1:
         Report frequency distribution shows:
         - {freq_summary}
 
-        The **latest report upload** occurred on **{latest_upload.strftime("%Y-%m-%d")}**, indicating active and ongoing model monitoring.
-
+        The **latest report upload** occurred on **{latest_upload_str}**, indicating active and ongoing model monitoring.
+        
         These insights suggest a consistent reporting cadence with emerging anomalies that may require deeper investigation, especially for high-risk (Tier 1) models.
         """)    
 
@@ -130,25 +206,43 @@ with tab2:
     # Place line chart, filters, insights about trends
     # KPI Trends Chart
     #st.markdown('<h5 style="margin-bottom:10px;">📈 KPI Trends Over Time</h5>', unsafe_allow_html=True)
+    # Copy your existing filtered data
     kpi_plot_df = filtered_df.copy()
+
+    # Step 1: Create a numeric quarter index
+    quarter_mapping = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}
+    kpi_plot_df["Quarter_Num"] = kpi_plot_df["Period"].map(quarter_mapping)
+
+    # Step 2: Combine year and numeric quarter to build a sort key
+    kpi_plot_df["Sort_Key"] = kpi_plot_df["Year"].astype(str) + "-" + kpi_plot_df["Quarter_Num"].astype(str)
+
+    # Step 3: Create Period Label (for x-axis display)
     kpi_plot_df["Period_Label"] = kpi_plot_df["Year"].astype(str) + " " + kpi_plot_df["Period"]
 
+    # Step 4: Sort by Sort_Key
+    kpi_plot_df = kpi_plot_df.sort_values("Sort_Key")
+
+    # Step 6: Plot
     fig = px.line(
-        kpi_plot_df.sort_values("Uploaded_On"),
+        kpi_plot_df,
         x="Period_Label",
         y="Value",
         color="KPI",
         markers=True,
         line_group="Model_Name",
-        hover_data=["Partner_Name", "Tier", "Summary"]
+        hover_data=["Model_Name", "Partner_Name", "Tier", "Summary"]
     )
+
     st.plotly_chart(fig, use_container_width=True)
+
+
 
     with st.expander("📊 KPI Trend Summary (Click to Expand)"):
         num_kpis = filtered_df["KPI"].nunique()
         num_models = filtered_df[["Partner_Name", "Model_ID"]].drop_duplicates().shape[0]
         periods = filtered_df["Period"].nunique()
         latest_upload = filtered_df["Uploaded_On"].max()
+        latest_upload_str = latest_upload.strftime("%Y-%m-%d %H:%M:%S") if pd.notnull(latest_upload) else "N/A"
         anomalies = filtered_df["Anomaly_Flag"].astype(str).str.upper().eq("TRUE").sum()
 
         top_kpi = (
