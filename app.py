@@ -84,8 +84,8 @@ st.markdown('<div class="main-title">Model Report Monitoring Dashboard</div>', u
 
 
 # ---------- Main Tabs ----------
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "Executive Summary", "Model across KPI's", "KPI's across Model", "Flagged Items", "Raw Data", "Missing Reports"
+tab1, tab3, tab2, tab4, tab5, tab6 = st.tabs([
+    "Executive Summary", "KPI's across Model","Model across KPI's", "Flagged Items", "Raw Data", "Missing Reports"
 ])
 
 # ---------- Overview Tab ----------
