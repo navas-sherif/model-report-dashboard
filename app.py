@@ -664,29 +664,6 @@ with tab3:
 
                     st.dataframe(pivot_df, use_container_width=True)
 
-            # --- KPI-wise Bar Chart ---
-            kpi_stats = []
-            for bundle_name, kpis in kpi_bundles.items():
-                for kpi in kpis:
-                    kpi_df = period_df[period_df["KPI"] == kpi]
-                    total = kpi_df["Model_ID"].nunique()
-                    flagged = kpi_df[kpi_df["Anomaly_Flag"] == True]["Model_ID"].nunique()
-                    kpi_stats.append({"KPI": kpi, "Type": "Total Models", "Count": total})
-                    kpi_stats.append({"KPI": kpi, "Type": "Flagged Models", "Count": flagged})
-
-            kpi_stats_df = pd.DataFrame(kpi_stats)
-
-            fig_bar = px.bar(
-                kpi_stats_df,
-                x="KPI",
-                y="Count",
-                color="Type",
-                barmode="group",
-                title="KPI-wise Comparison of Total and Flagged Models"
-            )
-            fig_bar.update_layout(yaxis_title="No. of Models")
-            st.plotly_chart(fig_bar, use_container_width=True)            
-
 with tab4:
     # Filter active models only
     filtered_active_df = filtered_df[filtered_df["Model_Status"] == "Active"]
