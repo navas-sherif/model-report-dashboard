@@ -9,7 +9,7 @@ st.set_page_config(page_title="Model Monitoring Dashboard", layout="wide")
 # ---------- Load Data ----------
 @st.cache_data
 def load_data():
-    df = pd.read_csv("sample_dataset.csv", parse_dates=["Uploaded_On"])
+    df = pd.read_csv("sample_dataset2.csv", parse_dates=["Uploaded_On"])
     df["Uploaded_On"] = pd.to_datetime(df["Uploaded_On"], errors='coerce')
     df["Anomaly_Flag"] = df["Anomaly_Flag"].astype(str).str.upper().eq("TRUE")
     return df
@@ -90,6 +90,41 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 
 # ---------- Overview Tab ----------
 with tab1:
+    # ---------- Compute Missing Reports (used in multiple tabs) ----------
+    years = list(range(2023, 2026))
+    quarters = ["Q1", "Q2", "Q3", "Q4"]
+    yearly = ["Y1"]
+
+    # Expected reports based on frequency
+    expected_reports = []
+    for _, row in df.drop_duplicates(["Partner_Name", "Model_ID"]).iterrows():
+        frequency = row["Frequency"]
+        partner = row["Partner_Name"]
+        model_id = row["Model_ID"]
+        model_name = row["Model_Name"]
+
+        for year in years:
+            periods = quarters if frequency == "Quarterly" else yearly
+            for period in periods:
+                expected_reports.append({
+                    "Model_ID": model_id,
+                    "Model_Name": model_name,
+                    "Partner_Name": partner,
+                    "Year": year,
+                    "Period": period
+                })
+
+    expected_df = pd.DataFrame(expected_reports)
+
+    # Actual submissions
+    submitted_df = df.drop_duplicates(["Model_ID", "Year", "Period"])[["Model_ID", "Year", "Period"]]
+    submitted_df["Submitted"] = True
+
+    # Merge expected with submitted
+    merged_df = expected_df.merge(submitted_df, on=["Model_ID", "Year", "Period"], how="left")
+    missing_df = merged_df[merged_df["Submitted"].isna()].drop(columns=["Submitted"])
+    total_missing = len(missing_df)
+
     total_partners = filtered_df["Partner_Name"].nunique()
     total_models = filtered_df["Model_ID"].nunique()
     total_active_models = filtered_df[filtered_df["Model_Status"] == "Active"]["Model_ID"].nunique()
@@ -104,9 +139,6 @@ with tab1:
     # Label for recent quarter (e.g., "Q1 2025")
     recent_quarter_label = f"Q{latest_quarter} {latest_year}"
     
-
-    
-
     quarter_start_date = pd.to_datetime(f"{latest_year}-{'%02d' % (3*(latest_quarter-1)+1)}-01")
     quarter_end_date = quarter_start_date + pd.DateOffset(months=3) - pd.Timedelta(days=1)
     # Determine the latest available quarter
@@ -117,7 +149,7 @@ with tab1:
         last_year = latest_report_date.year - 1
         last_year_label = f"{last_year}"
         # --- Filter for Last Year's Reports ---
-        last_year_df = filtered_df[filtered_df["Year"] == last_year]
+        last_year_df = filtered_df[(filtered_df["Year"] == last_year) & (filtered_df["Period"] == "Y1") & (filtered_df["Model_Status"] == "Active")]
         last_year_anomalies = last_year_df[last_year_df["Anomaly_Flag"] == True]
         total_anomalies_last_year = last_year_anomalies["Model_ID"].nunique()
     else:
@@ -125,7 +157,8 @@ with tab1:
     # Filter to just that quarter
     recent_quarter_df = filtered_df[
         (filtered_df["Report_Date"] >= quarter_start_date) &
-        (filtered_df["Report_Date"] <= quarter_end_date)
+        (filtered_df["Report_Date"] <= quarter_end_date) & (filtered_df["Model_Status"] == "Active")
+        & (filtered_df["Model_Status"] == "Active")
     ]
 
     # Use this for anomaly stats only
@@ -138,56 +171,7 @@ with tab1:
     col2.metric("Total Active Models", total_active_models)
     col3.metric("Total Partners", total_partners)
     col4.metric(f"Flagged Models in {recent_quarter_label}", total_alerts)
-    col5.metric(f"Flagged Models in {last_year_label}", total_anomalies_last_year)
-
-    with st.expander("Model Information"):
-        # Group to get model-level anomaly summary
-        model_level_summary = (
-            filtered_df
-            .groupby(["Model_ID", "Model_Name", "Partner_Name", "Tier", "Frequency","Model_Info","Production_Date"])
-            .agg(Anomaly_Flag=("Anomaly_Flag", "any"))  # True if any anomaly exists for that model
-            .reset_index()
-        ).drop(columns=["Anomaly_Flag"])
-
-        # Display the result
-        st.dataframe(model_level_summary, use_container_width=True)
-
-    with st.expander(f"Flagged Models in {recent_quarter_label}"):
-        # Filter anomalies in the recent quarter
-        anomaly_q_df = filtered_df[
-            (filtered_df["Report_Date"].dt.to_period("Q") == recent_quarter) &
-            (filtered_df["Anomaly_Flag"] == True)
-        ]
-
-        if not anomaly_q_df.empty:
-            # Aggregate KPI(s) with anomalies per model
-            anomaly_summary = (
-                anomaly_q_df
-                .groupby(["Model_ID", "Model_Name", "Partner_Name", "Tier"])
-                .agg(Summary=("Report_Summary", "first"))  # Use first available summary
-                .reset_index()
-            )
-
-            st.dataframe(anomaly_summary, use_container_width=True)
-        else:
-            st.info("No flagged items found for the recent quarter.")
-
-    last_year_df = filtered_df[filtered_df["Year"] == last_year]
-    last_year_anomalies = last_year_df[last_year_df["Anomaly_Flag"] == True]
-    total_anomalies_last_year = last_year_anomalies["Model_ID"].nunique()
-
-    with st.expander(f"Flagged Models in {last_year_label}"):
-        if not last_year_anomalies.empty:
-            st.dataframe(
-                last_year_anomalies
-                .groupby(["Model_ID", "Model_Name", "Partner_Name"])
-                .agg(Summary=("Report_Summary", "first"))
-                .reset_index(),
-                use_container_width=True
-            )
-        else:
-            st.info(f"No flagged items found for {last_year_label}.")
-
+    col5.metric(f"Flagged Models in Y1 {last_year_label}", total_anomalies_last_year)
 
     tier_counts = filtered_df.drop_duplicates("Model_ID")["Tier"].value_counts()
     freq_counts = filtered_df.drop_duplicates(["Model_ID", "Frequency"])["Frequency"].value_counts()
@@ -226,86 +210,151 @@ with tab1:
     )
 
     with col2:
-        #with st.expander("📌 Missing Reports by Partner"):
-        #st.markdown("This table highlights model reports that were **expected but not submitted** for specific periods.")
+        st.plotly_chart(px.pie(tier_counts, names=tier_counts.index, values=tier_counts.values, 
+                        title="Models by Tier").update_traces(textinfo='label+value', hole=0.2), use_container_width=True)
+    
+    col2, col1 = st.columns(2)
 
-        # Setup: Define period range
-        years = list(range(2023, 2026))
-        quarters = ["Q1", "Q2", "Q3", "Q4"]
-        yearly = ["Y1"]
+    with col1:
+        # --- Dynamic Missing Reports by Partner for Recent Quarter Only ---
 
-        # Create expected schedule for each model based on its frequency
-        expected_reports = []
+        # Step 1: Get last reported date per model
+        latest_reports = df.groupby("Model_ID")["Report_Date"].max().reset_index().rename(columns={"Report_Date": "Last_Reported_Date"})
 
-        for _, row in df.drop_duplicates(["Partner_Name", "Model_ID"]).iterrows():
-            frequency = row["Frequency"]
-            partner = row["Partner_Name"]
+        # Step 2: Get model info
+        model_info = df.drop_duplicates(subset=["Model_ID"])[["Model_ID", "Model_Name", "Partner_Name", "Frequency"]]
+        model_base = model_info.merge(latest_reports, on="Model_ID", how="left")
+
+        # Step 3: Generate expected periods
+        today = pd.Timestamp.today()
+        expected_rows = []
+
+        for _, row in model_base.iterrows():
             model_id = row["Model_ID"]
             model_name = row["Model_Name"]
+            partner = row["Partner_Name"]
+            freq = row["Frequency"]
 
-            for year in years:
-                periods = quarters if frequency == "Quarterly" else yearly
-                for period in periods:
-                    expected_reports.append({
+            start_date = df[df["Model_ID"] == model_id]["Report_Date"].min()
+            end_date = today
+
+            if freq == "Quarterly":
+                period_range = pd.date_range(start=start_date, end=end_date, freq="Q")
+                for date in period_range:
+                    year = date.year
+                    quarter = f"Q{((date.month - 1) // 3) + 1}"
+                    expected_rows.append({
                         "Model_ID": model_id,
                         "Model_Name": model_name,
                         "Partner_Name": partner,
                         "Year": year,
-                        "Period": period
+                        "Period": quarter
+                    })
+            elif freq == "Yearly":
+                years = range(start_date.year, today.year + 1)
+                for year in years:
+                    expected_rows.append({
+                        "Model_ID": model_id,
+                        "Model_Name": model_name,
+                        "Partner_Name": partner,
+                        "Year": year,
+                        "Period": "Y1"
                     })
 
-        expected_df = pd.DataFrame(expected_reports)
+        expected_df = pd.DataFrame(expected_rows)
 
-        # Actual submissions
+        # Step 4: Actual submissions
         submitted_df = df.drop_duplicates(["Model_ID", "Year", "Period"])[["Model_ID", "Year", "Period"]]
         submitted_df["Submitted"] = True
 
-        # Merge to flag missing
+        # Step 5: Merge expected vs submitted
+        expected_df["Year"] = expected_df["Year"].astype(int)
+        expected_df["Period"] = expected_df["Period"].astype(str).str.strip()
+        submitted_df["Year"] = submitted_df["Year"].astype(int)
+        submitted_df["Period"] = submitted_df["Period"].astype(str).str.strip()
+
         merged_df = expected_df.merge(submitted_df, on=["Model_ID", "Year", "Period"], how="left")
-        missing_df = merged_df[merged_df["Submitted"].isna()].drop(columns=["Submitted"])
 
-        # Count missing reports by partner
-        missing_by_partner = missing_df["Partner_Name"].value_counts()
+        # Step 6: Filter only recent quarter
+        df["Report_Date_Q"] = df["Report_Date"].dt.to_period("Q")
+        latest_q = df["Report_Date_Q"].max()  # e.g., Period('2025Q2', 'Q-DEC')
+        latest_q_year = latest_q.year
+        latest_q_label = f"Q{latest_q.quarter}"
 
-        st.plotly_chart(
-            px.pie(
-                names=missing_by_partner.index,
-                values=missing_by_partner.values,
-                title="Missing Reports by Partner"
-            ).update_traces(textinfo="label+value", hole=0.2),
-            use_container_width=True
-        )
-    
-    col1, col2 = st.columns(2)
+        missing_recent_q = merged_df[
+            (merged_df["Year"] == latest_q_year) &
+            (merged_df["Period"] == latest_q_label) &
+            (merged_df["Submitted"].isna())
+        ].drop(columns=["Submitted"])
 
-    with col1:
-        st.plotly_chart(px.pie(tier_counts, names=tier_counts.index, values=tier_counts.values, 
-                               title="Models by Tier").update_traces(textinfo='label+value', hole=0.2), use_container_width=True)
+        # Step 7: Count by partner and show pie
+        if not missing_recent_q.empty:
+            partner_counts = missing_recent_q["Partner_Name"].value_counts()
+
+            st.plotly_chart(
+                px.pie(
+                    names=partner_counts.index,
+                    values=partner_counts.values,
+                    title=f"Missing Reports by Partner – {latest_q_year} {latest_q_label}"
+                ).update_traces(textinfo="label+value", hole=0.2),
+                use_container_width=True
+            )
+        else:
+            st.success(f"✅ No missing reports for {latest_q_year} {latest_q_label}.")
 
     with col2:
         st.plotly_chart(px.pie(models_by_partner, names=models_by_partner.index, values=models_by_partner.values, 
                                title="Models by Partner").update_traces(textinfo='label+value', hole=0.2), use_container_width=True)
     
+    with st.expander("Model Information"):
+            # Group to get model-level anomaly summary
+            model_level_summary = (
+                filtered_df
+                .groupby(["Model_ID", "Model_Name", "Partner_Name", "Tier", "Frequency","Model_Info","Model_Status","Production_Date"])
+                .agg(Anomaly_Flag=("Anomaly_Flag", "any"))  # True if any anomaly exists for that model
+                .reset_index()
+            ).drop(columns=["Anomaly_Flag"])
+
+            # Display the result
+            st.dataframe(model_level_summary, use_container_width=True)
+
+    with st.expander(f"Flagged Models in {recent_quarter_label}"):
+        # Filter anomalies in the recent quarter
+        anomaly_q_df = filtered_df[
+            (filtered_df["Report_Date"].dt.to_period("Q") == recent_quarter) &
+            (filtered_df["Anomaly_Flag"] == True)
+        ]
+
+        if not anomaly_q_df.empty:
+            # Aggregate KPI(s) with anomalies per model
+            anomaly_summary = (
+                anomaly_q_df
+                .groupby(["Model_ID", "Model_Name", "Partner_Name", "Tier"])
+                .agg(Summary=("Report_Summary", "first"))  # Use first available summary
+                .reset_index()
+            )
+
+            st.dataframe(anomaly_summary, use_container_width=True)
+        else:
+            st.info("No flagged items found for the recent quarter.")
+
+    last_year_df = filtered_df[(filtered_df["Year"] == last_year) & (filtered_df["Period"] == "Y1") & (filtered_df["Model_Status"] == "Active")]
+    last_year_anomalies = last_year_df[last_year_df["Anomaly_Flag"] == True]
+    total_anomalies_last_year = last_year_anomalies["Model_ID"].nunique()
+
+    with st.expander(f"Flagged Models in Y1 {last_year_label}"):
+        if not last_year_anomalies.empty:
+            st.dataframe(
+                last_year_anomalies
+                .groupby(["Model_ID", "Model_Name", "Partner_Name"])
+                .agg(Summary=("Report_Summary", "first"))
+                .reset_index(),
+                use_container_width=True
+            )
+        else:
+            st.info(f"No flagged items found for {last_year_label}.")
 
 
-    # col1, col2, col3 = st.columns(3)
-    # with col1:
-    #     st.plotly_chart(px.pie(report_frequencies2, names=report_frequencies2.index, values=report_frequencies2.values, 
-    #                            title="Reports by Frequency").update_traces(textinfo='label+value', hole=0.2), use_container_width=True)
-
-    # with col2:
-    #     st.plotly_chart(px.pie(reports_by_partner, names=reports_by_partner.index, values=reports_by_partner.values, 
-    #                            title="Reports by Partner").update_traces(textinfo='label+value', hole=0.2), use_container_width=True)
-
-    # with col3:
-    #     fig_anomaly_reports = px.pie(
-    #         reports_by_anomaly,
-    #         names=reports_by_anomaly.index,
-    #         values=reports_by_anomaly.values,
-    #         title="Reports with Anomalies (Last Quarter)"
-    #     )
-    #     fig_anomaly_reports.update_traces(textinfo='label+value', hole=0.3)
-    #     st.plotly_chart(fig_anomaly_reports, use_container_width=True)
 
     with st.expander("Summary"):
         tier_summary = ", ".join([f"{tier}: {count}" for tier, count in tier_counts.items()])
@@ -314,10 +363,17 @@ with tab1:
         latest_upload_str = latest_upload.strftime("%Y-%m-%d %H:%M:%S") if pd.notnull(latest_upload) else "N/A"
 
         st.markdown(f"""
-        - In the **most recent quarter**, we identified **{int(total_alerts)} flagged items**.
-        - Tier Distribution: {tier_summary}
-        - Frequency Distribution: {freq_summary}
-        """)
+            We are currently monitoring **{total_active_models} active models** across **{total_partners} partners**. A total of **{total_reports} reports** have been submitted, with **{total_missing} reports missing**.
+
+            In terms of recent performance, **{total_alerts} models were flagged in {recent_quarter_label}**, and **{total_anomalies_last_year} models were flagged during the year {last_year_label}**.
+
+            Models are distributed across tiers as follows: {tier_summary}.  
+            Reporting frequencies are broken down as: {freq_summary}.
+
+            _Last data upload was on **{latest_upload_str}**._
+            """)
+
+
 
 with tab2:
     kpi_groups = {
@@ -429,129 +485,291 @@ with tab2:
                 st.plotly_chart(fig, use_container_width=True)
 
             with summary_col:
-                total_models = kpi_df["Model_ID"].nunique()
-                total_partners = kpi_df["Partner_Name"].nunique()
-                volatility = round(kpi_df["Value"].std(), 3)
-                recent_value = (
-                    kpi_df[kpi_df["Report_Date"] == kpi_df["Report_Date"].max()]
-                    .sort_values("Uploaded_On", ascending=False)["Value"]
-                    .mean()
-                )
-                st.markdown("**Summary**")
-                st.markdown(f"""
-                - **Volatility (Std):** {volatility}  
-                - **Recent Avg Value:** {recent_value:.3f}
-                """)
+                st.markdown("**Insight:**")
+
+                # Check if the model has products assigned
+                if kpi_df["Product"].notna().any() and kpi_df["Product"].str.strip().any():
+                    # Group by Product (handle multiple product scenarios)
+                    for product, group in kpi_df.groupby("Product"):
+                        volatility = round(group["Value"].std(), 3)
+                        recent_value = (
+                            group[group["Report_Date"] == group["Report_Date"].max()]
+                            .sort_values("Uploaded_On", ascending=False)["Value"]
+                            .mean()
+                        )
+
+                        # Parse threshold
+                        threshold_str = group["Threshold"].dropna().iloc[0] if group["Threshold"].notna().any() else None
+                        match = re.match(r"(<=|>=|<|>|==|=)?\s*([\d.]+)", str(threshold_str)) if threshold_str else None
+                        threshold_val = float(match.group(2)) if match else None
+                        op = match.group(1) if match else None
+
+                        # Volatility category
+                        if volatility < 0.05:
+                            volatility_desc = "very stable"
+                        elif volatility < 0.15:
+                            volatility_desc = "moderately stable"
+                        else:
+                            volatility_desc = "highly volatile"
+
+                        # Performance
+                        performance_desc = ""
+                        if threshold_val is not None:
+                            if (op in [">=", ">", None] and recent_value >= threshold_val) or \
+                            (op in ["<=", "<"] and recent_value <= threshold_val):
+                                performance_desc = "performing above expected levels"
+                            else:
+                                performance_desc = "underperforming against threshold"
+
+                        # Labels
+                        latest_period = group["Period_Label"].iloc[-1]
+                        product_label = f"**{product}**" if product else "**(No Product)**"
+                        kpi_label = f"**{kpi}**"
+
+                        st.markdown(f"""
+                        {product_label}: {kpi_label} is **{volatility_desc}** (std: {volatility}), recent value: **{recent_value:.3f}** in **{latest_period}**, and is **{performance_desc}** {f"(Threshold: {op} {threshold_val})" if threshold_val is not None else ""}.
+                        """)
+
+                else:
+                    # Handle model without product
+                    volatility = round(kpi_df["Value"].std(), 3)
+                    recent_value = (
+                        kpi_df[kpi_df["Report_Date"] == kpi_df["Report_Date"].max()]
+                        .sort_values("Uploaded_On", ascending=False)["Value"]
+                        .mean()
+                    )
+
+                    threshold_str = kpi_df["Threshold"].dropna().iloc[0] if kpi_df["Threshold"].notna().any() else None
+                    match = re.match(r"(<=|>=|<|>|==|=)?\s*([\d.]+)", str(threshold_str)) if threshold_str else None
+                    threshold_val = float(match.group(2)) if match else None
+                    op = match.group(1) if match else None
+
+                    if volatility < 0.05:
+                        volatility_desc = "very stable"
+                    elif volatility < 0.15:
+                        volatility_desc = "moderately stable"
+                    else:
+                        volatility_desc = "highly volatile"
+
+                    performance_desc = ""
+                    if threshold_val is not None:
+                        if (op in [">=", ">", None] and recent_value >= threshold_val) or \
+                        (op in ["<=", "<"] and recent_value <= threshold_val):
+                            performance_desc = "performing above expected levels"
+                        else:
+                            performance_desc = "underperforming against threshold"
+
+                    latest_period = kpi_df["Period_Label"].iloc[-1]
+                    kpi_label = f"**{kpi}**"
+
+                    st.markdown(f"""
+                    {kpi_label}: The KPI is **{volatility_desc}** (std: {volatility}), recent value: **{recent_value:.3f}** in **{latest_period}**, and is **{performance_desc}** {f"(Threshold: {op} {threshold_val})" if threshold_val is not None else ""}.
+                    """)
 
 with tab3:
-    #st.markdown("#### KPI Bundle Overview (Latest Quarter Only)")
-    st.markdown("Analyze how each model performed for each KPI category in the most recent reporting quarter.")
 
-    # Step 1: Define KPI Bundles
+    # --- Step 1: Define KPI Bundles ---
     kpi_bundles = {
         "Power": ["AUC", "KS", "Gini"],
         "Stability": ["PSI", "CSI"],
         "Accuracy": ["PDO"]
     }
 
-    # Step 2: Determine latest available quarter
-    if filtered_df.empty:
-        st.warning("No data available for the selected filters.")
-    else:
-        latest_q = filtered_df["Report_Date"].max().to_period("Q")
-        latest_q_df = filtered_df[filtered_df["Report_Date"].dt.to_period("Q") == latest_q]
+    filtered_active_df = filtered_df[filtered_df["Model_Status"] == "Active"]
 
-        if latest_q_df.empty:
-            st.info("No KPI data available for the latest quarter.")
+    if filtered_active_df.empty:
+        st.warning("No active model data available.")
+    else:
+        # --- Step 2: Prepare Available Periods ---
+        filtered_active_df["Report_Quarter"] = filtered_active_df["Report_Date"].dt.to_period("Q")
+        quarter_periods = sorted(filtered_active_df["Report_Quarter"].dropna().unique(), reverse=True)
+        quarter_labels = [f"{p.year} Q{p.quarter}" for p in quarter_periods]
+
+        yearly_periods = sorted(
+            filtered_active_df[filtered_active_df["Period"] == "Y1"]["Year"].dropna().unique(),
+            reverse=True
+        )
+        yearly_labels = [f"{y} Y1" for y in yearly_periods]
+
+        available_periods = yearly_labels + quarter_labels
+        default_period = quarter_labels[0] if quarter_labels else available_periods[0]
+
+        # --- Step 3: Title + Dropdown in Single Row ---
+        col1, col2 = st.columns([4, 1])
+        with col2:
+            selected_period = st.selectbox("Reporting Period", available_periods, index=available_periods.index(default_period), key="tab3_period_select")
+        with col1:
+            st.markdown(f"**Analyze how each model performed for each KPI category in {selected_period}.**")
+
+        # --- Step 4: Filter Data for Selected Period ---
+        if "Y1" in selected_period:
+            selected_year = int(selected_period.split(" ")[0])
+            period_df = filtered_active_df[
+                (filtered_active_df["Year"] == selected_year) &
+                (filtered_active_df["Period"] == "Y1")
+            ]
         else:
+            selected_year, selected_quarter = selected_period.split(" Q")
+            selected_q = f"{selected_year}Q{selected_quarter}"
+            period_df = filtered_active_df[
+                filtered_active_df["Report_Date"].dt.to_period("Q") == selected_q
+            ]
+
+        if period_df.empty:
+            st.info("No KPI data available for the selected period.")
+        else:
+            # --- KPI Bundle Summary Table ---
+            st.markdown("**Summary View**")
+            summary_data = []
             for bundle_name, kpis in kpi_bundles.items():
-                bundle_df = latest_q_df[latest_q_df["KPI"].isin(kpis)]
+                bundle_df = period_df[period_df["KPI"].isin(kpis)]
+                flagged_models = bundle_df[bundle_df["Anomaly_Flag"] == True]["Model_ID"].nunique()
+                total_models = bundle_df["Model_ID"].nunique()
+                summary_data.append({
+                    "KPI Bundle": bundle_name,
+                    "Total Models": total_models,
+                    "Models with Flagged KPIs": flagged_models
+                })
+            summary_df = pd.DataFrame(summary_data)
+            st.dataframe(summary_df)
+
+            # --- KPI Bundle Details Table ---
+            for bundle_name, kpis in kpi_bundles.items():
+                bundle_df = period_df[period_df["KPI"].isin(kpis)]
                 if bundle_df.empty:
                     continue
 
-                st.markdown(f"##### {bundle_name} KPIs")
-
-                pivot_df = (
-                    bundle_df
-                    .pivot_table(
-                        index=["Model_ID", "Model_Name", "Partner_Name", "Tier"],
-                        columns="KPI",
-                        values="Anomaly_Flag",
-                        aggfunc="first"
-                    )
-                    .fillna(False)
-                    .astype(bool)
-                    .reset_index()
+                bundle_df["Model_Product"] = bundle_df.apply(
+                    lambda row: f"{row['Model_Name']} - {row['Product']}" if pd.notnull(row.get("Product")) and row["Product"] else row["Model_Name"],
+                    axis=1
                 )
 
-                # Add a column for Total KPIs Flagged
-                kpi_cols = [col for col in pivot_df.columns if col in kpis]
-                pivot_df["Total_Flagged"] = pivot_df[kpi_cols].sum(axis=1)
+                with st.expander(f"##### {bundle_name} KPIs"):
+                    pivot_df = (
+                        bundle_df
+                        .pivot_table(
+                            index=["Model_ID", "Model_Product", "Partner_Name", "Tier"],
+                            columns="KPI",
+                            values="Anomaly_Flag",
+                            aggfunc="first"
+                        )
+                        .fillna(False)
+                        .astype(bool)
+                        .reset_index()
+                    )
 
-                # Sort by total flagged
-                pivot_df = pivot_df.sort_values("Total_Flagged", ascending=False)
+                    kpi_cols = [col for col in pivot_df.columns if col in kpis]
+                    pivot_df["Total_Flagged"] = pivot_df[kpi_cols].sum(axis=1)
+                    pivot_df = pivot_df.sort_values("Total_Flagged", ascending=False)
 
-                st.dataframe(pivot_df, use_container_width=True)
+                    st.dataframe(pivot_df, use_container_width=True)
 
-            with st.expander("Summary View"):
-                summary_data = []
-                for bundle_name, kpis in kpi_bundles.items():
-                    bundle_df = latest_q_df[latest_q_df["KPI"].isin(kpis)]
-                    flagged_models = bundle_df[bundle_df["Anomaly_Flag"] == True]["Model_ID"].nunique()
-                    total_models = bundle_df["Model_ID"].nunique()
-                    summary_data.append({
-                        "KPI Bundle": bundle_name,
-                        "Total Models": total_models,
-                        "Models with Flagged KPIs": flagged_models
-                    })
-                summary_df = pd.DataFrame(summary_data)
-                st.dataframe(summary_df)
+            # --- KPI-wise Bar Chart ---
+            kpi_stats = []
+            for bundle_name, kpis in kpi_bundles.items():
+                for kpi in kpis:
+                    kpi_df = period_df[period_df["KPI"] == kpi]
+                    total = kpi_df["Model_ID"].nunique()
+                    flagged = kpi_df[kpi_df["Anomaly_Flag"] == True]["Model_ID"].nunique()
+                    kpi_stats.append({"KPI": kpi, "Type": "Total Models", "Count": total})
+                    kpi_stats.append({"KPI": kpi, "Type": "Flagged Models", "Count": flagged})
 
+            kpi_stats_df = pd.DataFrame(kpi_stats)
+
+            fig_bar = px.bar(
+                kpi_stats_df,
+                x="KPI",
+                y="Count",
+                color="Type",
+                barmode="group",
+                title="KPI-wise Comparison of Total and Flagged Models"
+            )
+            fig_bar.update_layout(yaxis_title="No. of Models")
+            st.plotly_chart(fig_bar, use_container_width=True)            
 
 with tab4:
-    # Show anomaly records, trends in anomaly counts etc.
-    # Anomaly Records Table
-    anomaly_df = recent_quarter_df[recent_quarter_df["Anomaly_Flag"] == True]
-    col1, col2, col3 = st.columns(3)
+    # Filter active models only
+    filtered_active_df = filtered_df[filtered_df["Model_Status"] == "Active"]
 
-    with col1:
-        st.metric("No.of Models Flagged (Recent Quarter)", total_alerts)
-
-#     with col2:
-#         st.metric("Affected Models", anomaly_df['Model_ID'].nunique())
-
-#     with col3:
-#       st.metric("Affected KPIs", anomaly_df['KPI'].nunique())
-
-    # Safely create a combined column with fallback if Product is missing
-    anomaly_df["Model_Product"] = anomaly_df.apply(
-        lambda row: row["Model_Name"] if pd.isna(row["Product"]) or row["Product"] == ''
-        else f"{row['Model_Name']} - {row['Product']}", axis=1
-    )
-
-    # Then group and pivot
-    heatmap_df = (
-        anomaly_df.groupby(["Model_Product", "KPI"])
-        .size()
-        .unstack(fill_value=0)
-    )
-
-    st.dataframe(heatmap_df)
-
-
-    st.markdown('<h5 style="margin-bottom:10px;">Flagged Records</h5>', unsafe_allow_html=True)
-
-    if not anomaly_df.empty:
-        st.dataframe(anomaly_df.drop(columns=["Anomaly_Flag"]).sort_values("Uploaded_On", ascending=False), use_container_width=True)
+    if filtered_active_df.empty:
+        st.warning("No active model data available.")
     else:
-        st.info("No anomalies found in selected filters.")
+        # --- Prepare Available Periods ---
+        filtered_active_df["Report_Quarter"] = filtered_active_df["Report_Date"].dt.to_period("Q")
+        quarter_periods = sorted(filtered_active_df["Report_Quarter"].dropna().unique(), reverse=True)
+        quarter_labels = [f"{p.year} Q{p.quarter}" for p in quarter_periods]
 
-    with st.expander("Summary / Recommendations"):
-        st.markdown(f"""
-        - **{anomaly_df['Model_ID'].nunique()} models** had at least one Flagged KPI.
-        - **{anomaly_df['KPI'].nunique()} KPIs** were involved in flagged reports.
-        - Consider deep-diving into models with recurring anomalies.
-        """)
+        yearly_periods = sorted(
+            filtered_active_df[filtered_active_df["Period"] == "Y1"]["Year"].dropna().unique(),
+            reverse=True
+        )
+        yearly_labels = [f"{y} Y1" for y in yearly_periods]
+
+        available_periods = yearly_labels + quarter_labels
+        default_period = quarter_labels[0] if quarter_labels else available_periods[0]
+
+        # --- Title + Dropdown (same row) ---
+        col1, col2 = st.columns([4, 1])
+        with col2:
+            selected_period = st.selectbox("Reporting Period", available_periods, index=available_periods.index(default_period), key="tab4_period_select")
+        with col1:
+            #st.markdown(f"**View all flagged KPI records during {selected_period}.**")
+
+            # --- Filter Data for Selected Period ---
+            if "Y1" in selected_period:
+                selected_year = int(selected_period.split(" ")[0])
+                period_df = filtered_active_df[
+                    (filtered_active_df["Year"] == selected_year) &
+                    (filtered_active_df["Period"] == "Y1")
+                ]
+            else:
+                selected_year, selected_quarter = selected_period.split(" Q")
+                selected_q = f"{selected_year}Q{selected_quarter}"
+                period_df = filtered_active_df[
+                    filtered_active_df["Report_Date"].dt.to_period("Q") == selected_q
+                ]
+
+            # --- Anomaly Records ---
+            anomaly_df = period_df[period_df["Anomaly_Flag"] == True]
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("No. of Models Flagged", anomaly_df['Model_ID'].nunique())
+            with col2:
+                st.metric("Total Flagged Records", anomaly_df.shape[0])
+            with col3:
+                st.metric("Affected KPIs", anomaly_df['KPI'].nunique())
+
+        if anomaly_df.empty:
+            st.info("No anomalies found for the selected period.")
+        else:
+            # --- Add Model_Product column safely ---
+            anomaly_df["Model_Product"] = anomaly_df.apply(
+                lambda row: row["Model_Name"] if pd.isna(row["Product"]) or row["Product"] == ''
+                else f"{row['Model_Name']} - {row['Product']}", axis=1
+            )
+
+            # --- Heatmap-like Table ---
+            heatmap_df = (
+                anomaly_df.groupby(["Model_Product", "KPI"])
+                .size()
+                .unstack(fill_value=0)
+            )
+            st.markdown("**KPI Flag Count per Model**")
+            st.dataframe(heatmap_df, use_container_width=True)
+
+            # --- Raw Anomaly Records Table ---
+            st.markdown('<h5 style="margin-bottom:10px;">Flagged Records</h5>', unsafe_allow_html=True)
+            st.dataframe(anomaly_df.drop(columns=["Anomaly_Flag"]).sort_values("Uploaded_On", ascending=False), use_container_width=True)
+
+            # --- Summary Box ---
+            with st.expander("Summary / Recommendations"):
+                st.markdown(f"""
+                - **{anomaly_df['Model_ID'].nunique()} models** had at least one flagged KPI.
+                - **{anomaly_df['KPI'].nunique()} KPIs** were involved in flagged reports.
+                - Consider deep-diving into models with recurring flags across periods.
+                """)
+
 
 with tab5:
     # Raw Data Table (Expandable)
@@ -561,56 +779,106 @@ with tab5:
     st.markdown("**Note:** This is the raw data used for all visualizations and analyses in this dashboard.")
 
 with tab6:
-    #with st.expander("Missing Reports by Partner"):
-    st.markdown("This table highlights model reports that were **expected but not submitted** for specific periods.")
 
-    # Setup: Define period range
-    years = list(range(2023, 2026))
-    quarters = ["Q1", "Q2", "Q3", "Q4"]
-    yearly = ["Y1"]
+    # Step 1: Get last reported date per model
+    latest_reports = df.groupby("Model_ID")["Report_Date"].max().reset_index().rename(columns={"Report_Date": "Last_Reported_Date"})
 
-    # Create expected schedule for each model based on its frequency
-    expected_reports = []
+    # Step 2: Get unique model info
+    model_info = df.drop_duplicates(subset=["Model_ID"])[["Model_ID", "Model_Name", "Partner_Name", "Frequency"]]
+    model_base = model_info.merge(latest_reports, on="Model_ID", how="left")
 
-    for _, row in df.drop_duplicates(["Partner_Name", "Model_ID"]).iterrows():
-        frequency = row["Frequency"]
-        partner = row["Partner_Name"]
+    # Step 3: Generate expected periods based on frequency from first report to current quarter/year
+    from pandas.tseries.offsets import QuarterEnd
+    from dateutil.relativedelta import relativedelta
+
+    today = pd.Timestamp.today()
+    expected_rows = []
+
+    for _, row in model_base.iterrows():
         model_id = row["Model_ID"]
         model_name = row["Model_Name"]
+        partner = row["Partner_Name"]
+        freq = row["Frequency"]
 
-        for year in years:
-            periods = quarters if frequency == "Quarterly" else yearly
-            for period in periods:
-                expected_reports.append({
+        start_date = df[df["Model_ID"] == model_id]["Report_Date"].min()
+        end_date = today
+
+        if freq == "Quarterly":
+            period_range = pd.date_range(start=start_date, end=end_date, freq="Q")
+            for date in period_range:
+                year = date.year
+                quarter = f"Q{((date.month - 1) // 3) + 1}"
+                expected_rows.append({
                     "Model_ID": model_id,
                     "Model_Name": model_name,
                     "Partner_Name": partner,
                     "Year": year,
-                    "Period": period
+                    "Period": quarter
                 })
 
-    expected_df = pd.DataFrame(expected_reports)
+        elif freq == "Yearly":
+            years = range(start_date.year, today.year + 1)
+            for year in years:
+                expected_rows.append({
+                    "Model_ID": model_id,
+                    "Model_Name": model_name,
+                    "Partner_Name": partner,
+                    "Year": year,
+                    "Period": "Y1"
+                })
 
-    # Actual submissions
+    expected_df = pd.DataFrame(expected_rows)
+
+    # Step 4: Get actual submissions
     submitted_df = df.drop_duplicates(["Model_ID", "Year", "Period"])[["Model_ID", "Year", "Period"]]
     submitted_df["Submitted"] = True
 
-    # Merge to flag missing
+    # Normalize datatypes
+    expected_df["Year"] = expected_df["Year"].astype(int)
+    expected_df["Period"] = expected_df["Period"].astype(str).str.strip()
+    submitted_df["Year"] = submitted_df["Year"].astype(int)
+    submitted_df["Period"] = submitted_df["Period"].astype(str).str.strip()
+
+    # Step 5: Merge to flag missing reports
     merged_df = expected_df.merge(submitted_df, on=["Model_ID", "Year", "Period"], how="left")
-    missing_df = merged_df[merged_df["Submitted"].isna()].drop(columns=["Submitted"])
+    merged_df["Period_Label"] = merged_df["Year"].astype(str) + " " + merged_df["Period"]
 
-    if not missing_df.empty:
-        st.info(f"{len(missing_df)} missing reports found across models.")
-        st.dataframe(missing_df.sort_values(["Partner_Name", "Model_Name", "Year", "Period"]), use_container_width=True)
-    else:
-        st.success("✅ All expected reports have been submitted.")
+    # Step 6: Show dropdown to select reporting period
+    available_periods = sorted(
+        merged_df["Period_Label"].unique(),
+        key=lambda x: (
+            int(x.split()[0]),  # Year
+            int(x.split()[1][1:]) if "Q" in x else 5  # Q1–Q4 = 1–4, Y1 = 5 (comes after quarters)
+        ),
+        reverse=True
+    )
 
-        # --- Summary for Missing Reports ---
-    total_expected = len(expected_df)
-    total_missing = len(missing_df)
+    # Ensure default is latest *Quarterly* period, fallback to most recent
+    quarterly_periods = [p for p in available_periods if "Q" in p]
+    default_period = quarterly_periods[0] if quarterly_periods else available_periods[0]
+
+    # Show heading and dropdown in one row
+    col1, col2 = st.columns([4, 1])
+    with col2:
+        selected_period = st.selectbox(" ", available_periods, index=available_periods.index(default_period), key="tab6_period")
+    with col1:
+        st.markdown(f"**View missing reports for the selected reporting period ({selected_period})**")
+
+
+    selected_year, selected_period_code = selected_period.split()
+    selected_year = int(selected_year.strip())
+    selected_period_code = selected_period_code.strip()
+
+    filtered_missing_df = merged_df[
+        (merged_df["Year"] == selected_year) & (merged_df["Period"] == selected_period_code) &
+        (merged_df["Submitted"].isna())
+    ].drop(columns=["Submitted"])
+
+    total_expected = merged_df[(merged_df["Year"] == selected_year) & (merged_df["Period"] == selected_period_code)].shape[0]
+    total_missing = filtered_missing_df.shape[0]
     total_submitted = total_expected - total_missing
-    affected_partners = missing_df["Partner_Name"].nunique()
-    affected_models = missing_df["Model_Name"].nunique()
+    affected_partners = filtered_missing_df["Partner_Name"].nunique()
+    affected_models = filtered_missing_df["Model_Name"].nunique()
 
     with st.expander("Missing Reports Summary"):
         st.markdown(f"""
@@ -621,11 +889,20 @@ with tab6:
         - **Models Affected**: {affected_models}
         """)
 
-        # Optional: Partner-wise summary
-        #st.markdown("Partner-wise Missing Report Summary")
-        partner_summary = missing_df.groupby("Partner_Name").agg({
-            "Model_Name": "nunique",
-            "Model_ID": "count"
-        }).rename(columns={"Model_Name": "Models Affected", "Model_ID": "Missing Reports"}).reset_index()
-        st.dataframe(partner_summary, use_container_width=True)
+        if not filtered_missing_df.empty:
+            partner_summary = filtered_missing_df.groupby("Partner_Name").agg({
+                "Model_Name": "nunique",
+                "Model_ID": "count"
+            }).rename(columns={"Model_Name": "Models Affected", "Model_ID": "Missing Reports"}).reset_index()
+            st.dataframe(partner_summary, use_container_width=True)
 
+    if not filtered_missing_df.empty:
+        st.info(f"{len(filtered_missing_df)} missing reports found for {selected_period}.")
+        st.dataframe(
+            filtered_missing_df.sort_values(["Partner_Name", "Model_Name"]),
+            use_container_width=True
+        )
+    else:
+        st.success("✅ All expected reports have been submitted for the selected period.")
+
+    st.markdown("**Note:** This tab highlights model reports that were **expected but not submitted** for specific periods based on each model's actual submission history and frequency.")
