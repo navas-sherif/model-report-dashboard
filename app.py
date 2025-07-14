@@ -9,7 +9,7 @@ st.set_page_config(page_title="Model Monitoring Dashboard", layout="wide")
 # ---------- Load Data ----------
 @st.cache_data
 def load_data():
-    df = pd.read_csv("sample_dataset2.csv", parse_dates=["Uploaded_On"])
+    df = pd.read_csv("sample_dataset3.csv", parse_dates=["Uploaded_On"])
     df["Uploaded_On"] = pd.to_datetime(df["Uploaded_On"], errors='coerce')
     df["Anomaly_Flag"] = df["Anomaly_Flag"].astype(str).str.upper().eq("TRUE")
     return df
@@ -129,7 +129,6 @@ with tab1:
     total_models = filtered_df["Model_ID"].nunique()
     total_active_models = filtered_df[filtered_df["Model_Status"] == "Active"]["Model_ID"].nunique()
     unique_metrics = filtered_df["KPI"].nunique()
-    # total_alerts = filtered_df["Anomaly_Flag"].sum()
     total_reports = filtered_df.drop_duplicates(["Partner_Name", "Model_ID", "Year", "Period"]).shape[0]
     # --- Filter for Last Quarter Anomalies ---
     # Get latest year and quarter
@@ -436,21 +435,6 @@ with tab2:
                     hover_data=["Partner_Name", "Tier", "Frequency"]
                 )
 
-
-                # # 2. Overlay anomaly points (red circles)
-                # if "Anomaly_Flag" in kpi_df.columns:
-                #     anomaly_points = kpi_df[kpi_df["Anomaly_Flag"] == True]
-                #     if not anomaly_points.empty:
-                #         fig.add_scatter(
-                #             x=anomaly_points["Period_Label"],
-                #             y=anomaly_points["Value"],
-                #             mode="markers",
-                #             name="Anomaly",
-                #             marker=dict(size=10, color="red", symbol="circle"),
-                #             hovertext=anomaly_points["Model_Name"],
-                #             showlegend=True
-                #         )
-
                 import re
 
                 # 3. Add yellow threshold lines (dashed)
@@ -472,8 +456,6 @@ with tab2:
                                 )
                             except ValueError:
                                 pass
-
-
 
                 # 4. Final chart styling
                 fig.update_layout(
